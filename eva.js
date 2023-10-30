@@ -13,6 +13,7 @@ class Eva {
   }
   /*
    * Evaluates an expression in an given environment. If env not passed, use the global scope
+   * We overwrite the standard eval function. We could also name it otherwise
    */
   eval(exp, env = this.global) {
     // self evalutlating expressing. Not action needed
@@ -27,19 +28,28 @@ class Eva {
       // exp = '"hello"'
       return exp.slice(1, -1); // from second to last index which is not included.
     }
+    // since we use a external function we forward the this keyword to be able to use the recurseive eval function
     if (exp[0] === "+") {
-      // since we use a external function we forward the this keyword to be able to use the recurseive eval function
-      return handleOperator.apply(this, [exp, "+"]);
+      return handleOperator.apply(this, [exp, env, "+"]);
     }
     if (exp[0] === "-") {
-      return handleOperator.apply(this, [exp, "-"]);
+      return handleOperator.apply(this, [exp, env, "-"]);
     }
     if (exp[0] === "*") {
-      return handleOperator.apply(this, [exp, "*"]);
+      return handleOperator.apply(this, [exp, env, "*"]);
     }
     if (exp[0] === "/") {
-      return handleOperator.apply(this, [exp, "/"]);
+      return handleOperator.apply(this, [exp, env, "/"]);
     }
+    // Block: sequence of expression
+    if (exp[0] === "begin") {
+      // create environment depending on where we run the code.
+      // If run in the global scope, env (parent) will be global scope
+      // and if run in nested scope, env will be nested scope
+      const blockEnv = new Environment({}, env);
+      return this._evalBlock(exp, blockEnv);
+    }
+    // variable declaration (var foo 8)
     if (exp[0] === "var") {
       return handleVariables.apply(this, [exp, env, "expression"]);
     }
@@ -47,6 +57,19 @@ class Eva {
       return handleVariables.apply(this, [exp, env, "access"]);
     }
     throw `Unimplemented: ${JSON.stringify(exp)}`;
+  }
+
+  _evalBlock(blockExpression, blockEnv) {
+    let result;
+    // Example: block (statement) = ['begin', ['+', '2', '2'], ['*', '4', '2']]
+    // _tag === 'begin' // true
+    // expressions === [['+', '2', '2'], ['*', '4', '2']]
+    const [_tag, ...expressions] = blockExpression;
+    expressions.forEach((exp) => {
+      result = this.eval(exp, blockEnv);
+    });
+    // by this, will always return the last result in a function
+    return result;
   }
 }
 
@@ -83,6 +106,35 @@ assert.strictEqual(eva.eval(["var", "x", 10]), 10);
 assert.strictEqual(eva.eval(["var", "checked", "true"]), true);
 assert.strictEqual(eva.eval("x"), 10);
 
+// BLOCKS:
+assert.strictEqual(
+  // create x and y within a blick and make a calculation
+  eva.eval(
+    ["begin", ["var", "x", 10], ["var", "y", 20], ["+", ["*", "x", "y"], 30]],
+  ),
+  230,
+);
+
+assert.strictEqual(
+  // check differensation if inner and outer scope. X should not be overwritten
+  eva.eval(
+    ["begin", ["var", "x", 10], ["begin", ["var", "x", 20], "x"], "x"],
+  ),
+  10,
+);
+
+assert.strictEqual(
+  // access to outer scope
+  eva.eval(
+    ["begin", ["var", "value", 10], ["var", "result", ["begin", ["var", "x", [
+      "+",
+      "value",
+      10,
+    ]], "x"]], "result"],
+  ),
+  20,
+);
+
 console.log("all assertions passed!");
 
 function isVariableName(exp) {
@@ -90,16 +142,16 @@ function isVariableName(exp) {
   return typeof exp === "string" && /^[a-zA-Z][a-zA-Z0-9_]*$/.test(exp);
 }
 
-function handleOperator(exp, operator) {
+function handleOperator(exp, env, operator) {
   switch (operator) {
     case "+":
-      return this.eval(exp[1]) + this.eval(exp[2]); // break not needed since we return directly
+      return this.eval(exp[1], env) + this.eval(exp[2], env); // break not needed since we return directly
     case "-":
-      return this.eval(exp[1]) - this.eval(exp[2]); // break not needed since we return directly
+      return this.eval(exp[1], env) - this.eval(exp[2], env); // break not needed since we return directly
     case "*":
-      return this.eval(exp[1]) * this.eval(exp[2]); // break not needed since we return directly
+      return this.eval(exp[1], env) * this.eval(exp[2], env); // break not needed since we return directly
     case "/":
-      return this.eval(exp[1]) / this.eval(exp[2]); // break not needed since we return directly
+      return this.eval(exp[1], env) / this.eval(exp[2], env); // break not needed since we return directly
     default:
       break;
   }
@@ -111,7 +163,7 @@ function handleVariables(exp, env, type) {
     case "expression":
       // as with the operator we have to recursivly access the value
       // this is because the value could be an expression itsself which has to be interpreted before.
-      return env.define(name, this.eval(value));
+      return env.define(name, this.eval(value, env));
     case "access":
       // in case of expression the exp will be just the name of the variable we are trying to access
       return env.lookup(exp);
